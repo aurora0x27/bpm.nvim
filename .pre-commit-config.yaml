@@ -1,0 +1,14 @@
+repos:
+  - repo: https://github.com/JohnnyMorganz/StyLua
+    rev: v2.4.1
+    hooks:
+      - id: stylua-github # or stylua-system / stylua-github
+  - repo: https://github.com/Calinou/pre-commit-luacheck
+    rev: v1.0.0
+    hooks:
+      - id: luacheck
+  - repo: https://github.com/rbubley/mirrors-prettier
+    rev: v3.8.3 # Use the latest version
+    hooks:
+      - id: prettier
+        types_or: [markdown, yaml]
