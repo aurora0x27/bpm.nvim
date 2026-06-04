@@ -1,6 +1,7 @@
 # bpm.nvim
 
-Buffer pool manager for Neovim — per‑tab buffer groups, configurable detach policies, unique name shortening, and session persistence.
+Buffer pool manager for Neovim : Implement working set for neovim — per‑tab buffer groups, configurable detach policies,
+unique name shortening, and session persistence.
 
 ## Features
 
