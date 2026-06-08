@@ -1,0 +1,400 @@
+*bpm.txt*  Buffer Pool Manager for Neovim
+
+Author: aurora0x27
+
+==============================================================================
+CONTENTS                                                     *bpm-contents*
+
+1. Introduction .................................................. |bpm-intro|
+2. Design Philosophy ........................................ |bpm-philosophy|
+3. Installation ................................................ |bpm-install|
+4. Commands ................................................... |bpm-commands|
+5. Detach Policies ............................................ |bpm-policies|
+6. Buffer Name Resolution ...................................... |bpm-bufname|
+7. Session Persistence ......................................... |bpm-session|
+8. API ............................................................. |bpm-api|
+9. Debugging ..................................................... |bpm-debug|
+
+==============================================================================
+
+1. INTRODUCTION                                                  *bpm-intro*
+
+bpm.nvim implements a "buffer pool" model for Neovim.
+
+Unlike Neovim's default global buffer list, bpm.nvim associates buffers with
+individual tabpages. Each tab owns its own ordered working set of buffers,
+allowing tabs to behave more like independent task contexts.
+
+Main features:
+
+• Per-tab buffer pools
+• Configurable buffer detach policies
+• Unique buffer name shortening
+• User-defined tab names
+• Session persistence
+
+Calling
+
+>lua
+    require 'bpm'.setup()
+<
+
+installs all required autocommands and user commands.
+
+==============================================================================
+2. DESIGN PHILOSOPHY                                         *bpm-philosophy*
+
+Why does bpm.nvim behave differently from traditional buffer managers?
+
+• Editor as Workspace
+
+Neovim is treated as a short-lived workspace instance.
+
+A session is expected to be restored later, much like resuming from a saved
+memory image. bpm.nvim embraces this workflow by making buffer-pool
+serialization a first-class feature.
+
+• Tabs as Task Threads
+
+A tabpage represents a task rather than merely a viewport.
+
+Each tab maintains an ordered set of buffers. Leaving a tab hides its buffers
+from the global buffer list; re-entering the tab restores them.
+
+This keeps buffer lists manageable even in long-running editing sessions.
+
+• Detach Instead of Close
+
+Removing a buffer from a tab is an explicit operation.
+
+When a buffer is detached, bpm.nvim allows the user to decide how affected
+windows should be handled.
+
+See |bpm-policies|.
+
+• Minimal Unique Names
+
+Instead of displaying full paths, bpm.nvim computes the shortest suffix that
+uniquely identifies each buffer.
+
+Example:
+>sh
+    ~/projects/foo/init.lua
+    ~/projects/bar/init.lua
+<
+becomes:
+>sh
+    foo/init.lua
+    bar/init.lua
+<
+See |bpm-bufname|.
+
+• Session as Core Dump
+
+Session persistence stores the essential working set:
+
+- tab ordering
+- tab names
+- attached buffers
+
+It intentionally avoids serializing transient UI state such as window layouts
+or temporary buffers.
+
+==============================================================================
+3. INSTALLATION                                               *bpm-install*
+
+lazy.nvim:
+>lua
+{
+  "aurora0x27/bpm.nvim",
+  config = function()
+    require("bpm").setup()
+  end,
+}
+<
+packer.nvim:
+>lua
+use {
+  "aurora0x27/bpm.nvim",
+  config = function()
+    require("bpm").setup()
+  end,
+}
+<
+No configuration options are currently required.
+
+==============================================================================
+4. COMMANDS                                                  *bpm-commands*
+
+							    *:BpmRenameTab*
+
+:BpmRenameTab {name}
+
+Rename the current tab.
+
+Example:
+
+>
+    :BpmRenameTab Backend
+<
+
+
+            						     *:BpmListTab*
+:BpmListTab
+
+Display buffers attached to the current tab.
+
+							    *:BpmBufName*
+:[count]BpmBufName
+
+Display the resolved short name of a buffer.
+
+If [count] is omitted, the current buffer is used.
+
+Examples:
+
+>
+    :BpmBufName
+    :42BpmBufName
+<
+
+---
+
+                                                            *:BpmDetach*
+
+:BpmDetach [policy] [bufnr ...]
+
+Detach one or more buffers from the current tab.
+
+If no buffer numbers are supplied, the current buffer is detached.
+
+Examples:
+
+>
+:BpmDetach
+:BpmDetach idle
+:BpmDetach replace 12 18
+<
+
+                                                        *:BpmEvict*
+
+:BpmEvict [policy] [bufnr ...]
+
+Detach buffers from all tabs and permanently delete them.
+
+Examples:
+
+>
+:BpmEvict
+:BpmEvict destroy 8
+<
+
+                                                    *:BpmDumpState*
+
+:BpmDumpState
+
+Print internal state for debugging.
+
+==============================================================================
+5. DETACH POLICIES                                           *bpm-policies*
+
+Detach policies determine what happens to windows displaying a buffer after
+the buffer is detached.
+
+replace                                                *bpm-policy-replace*
+
+Replace affected windows with another buffer from the same tab.
+
+If no suitable replacement exists, an idle buffer is created.
+
+destroy                                                *bpm-policy-destroy*
+
+Close affected windows.
+
+idle                                                      *bpm-policy-idle*
+
+Replace affected windows with an empty scratch-like buffer.
+
+The default policy is: `replace`
+
+==============================================================================
+6. BUFFER NAME RESOLUTION                                    *bpm-bufname*
+
+bpm.nvim uses a suffix trie to compute the shortest unique path suffix for
+every listed file buffer.
+
+Example:
+
+>
+    ~/work/foo/init.lua
+    ~/work/bar/init.lua
+<
+
+resolves to:
+
+>
+    foo/init.lua
+    bar/init.lua
+<
+
+The cache is automatically rebuilt when:
+
+* BufAdd
+* BufWipeout
+* BufFilePost
+
+Use:
+
+>
+:BpmBufName
+<
+
+or:
+
+>lua
+    require 'bpm'.resolve_bufname(bufnr)
+<
+
+to retrieve a resolved name.
+
+==============================================================================
+7. SESSION PERSISTENCE                                       *bpm-session*
+
+State can be serialized using:
+
+>lua
+    local json = require 'bpm'.to_json()
+<
+
+and restored using:
+
+>lua
+    require 'bpm'.from_json(json)
+<
+
+Serialized state includes:
+
+* tab names
+* tab ordering
+* attached buffers
+* file paths
+
+Example integration with persistence.nvim:
+
+>lua
+    vim.api.nvim_create_autocmd('User', {
+      pattern = 'PersistenceLoadPost',
+      callback = function()
+	if type(vim.g.BufferPoolState) == 'string' then
+	  require('bpm').from_json(vim.g.BufferPoolState)
+	end
+      end,
+    })
+
+    vim.api.nvim_create_autocmd('User', {
+      pattern = 'PersistenceSavePre',
+      callback = function()
+	vim.g.BufferPoolState = require('bpm').to_json()
+      end,
+    })
+<
+
+Note:
+The restore process is ordinal-based.
+
+The Nth serialized tab is restored into the Nth runtime tabpage.
+
+Tab handles themselves are not serialized.
+
+==============================================================================
+8. API                                                           *bpm-api*
+
+All public functions are exposed through:
+
+>lua
+    require 'bpm'
+<
+
+
+                                                    *bpm.get_attached_buf()*
+get_attached_buf([{tab}])
+
+Return a copy of the buffer list attached to {tab}.
+
+Returns:
+    integer[] array of `bufnr`
+
+                                                   *bpm.resolve_bufname()*
+resolve_bufname({bufnr})
+
+Return the unique shortened name of a buffer.
+
+Returns:
+    string: the unique shortened name of a buffer.
+
+                                                   *bpm.resolve_tabname()*
+resolve_tabname({tabid})
+
+Return the user-defined tab name.
+
+If no custom name exists, a numeric identifier is returned.
+
+Returns:
+    string: tab name string, if not renamed, return the |tab-ID| as string
+
+                                                        *bpm.rename_tab()*
+rename_tab({tabid}, {name})
+
+Assign a custom name to a tab.
+
+                                                            *bpm.detach()*
+detach([{buf}], [{tab}], [{policy}])
+
+Detach a buffer from a tab.
+
+Unsaved modified buffers cannot be detached.
+
+                                                             *bpm.evict()*
+
+evict([{buf}], [{policy}])
+
+Detach a buffer from all tabs and delete it.
+
+                                                           *bpm.to_json()*
+
+to_json()
+
+Serialize current state.
+
+Returns:
+    string: json result
+
+
+                                                         *bpm.from_json()*
+from_json({data})
+
+Restore state from serialized JSON.
+
+==============================================================================
+9. DEBUGGING                                                  *bpm-debug*
+
+                                                       *bpm.debug_dump()*
+
+debug_dump()
+
+Display:
+
+• tabs
+ attached buffers
+ resolved names
+ modification status
+
+Equivalent to:
+
+>
+    :BpmDumpState
+<
+
+==============================================================================
+
+vim:tw=78:ts=8:noet:ft=help:norl:
